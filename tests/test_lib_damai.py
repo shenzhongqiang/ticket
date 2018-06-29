@@ -8,11 +8,11 @@ class Test(unittest.TestCase):
     def tearDown(self):
         pass
 
-    def test_get_concert_from_web(self):
-        result = self.inst.get_concert_from_web()
+    def test_get_concerts_from_web(self):
+        result = self.inst.get_concerts_from_web()
 
-    def test_get_concert_from_db(self):
-        result = self.inst.get_concert_from_db()
+    def test_get_concerts_from_db(self):
+        result = self.inst.get_concerts_from_db()
 
     def test_get_performs_from_web(self):
         result = self.inst.get_performs_from_web(149252)
@@ -27,3 +27,6 @@ class Test(unittest.TestCase):
 
     def test_get_concert_tickets_from_db(self):
         self.inst.get_concert_tickets_from_db(9049689)
+
+    def test_get_concerts_tickets_from_db(self):
+        self.inst.get_concerts_tickets_from_db()

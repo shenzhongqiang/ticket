@@ -30,7 +30,7 @@ class Damai(object):
             })
         return result
 
-    def get_concert_from_web(self):
+    def get_concerts_from_web(self):
         url = "https://search.damai.cn/searchajax.html"
         cty = "上海"
         ctl = "演唱会"
@@ -56,30 +56,25 @@ class Damai(object):
             venue = item["venue"]
             venuecity = item["venuecity"]
             performs = self.get_performs_from_web(projectid)
-            for perform in performs:
-                performid = perform["performid"]
-                existing = self.db.concert.find({"projectid": projectid, "performid": performid}).count()
-                print(projectid, performid, existing)
-                if existing > 1:
-                    err = "damai concert project {} perform {} has {} records".format(projectid, performid, existing)
-                    raise Exception(err)
-                if existing == 1:
-                    continue
-                concert = {
-                    "projectid": projectid,
-                    "performid": performid,
-                    "actors": actors,
-                    "cityname": cityname,
-                    "name": name,
-                    "venue": venue,
-                    "venuecity": venuecity,
-                    "start_time": perform["start_time"],
-                    "show_datetime": perform["show_datetime"],
-                    "show_weekday": perform["show_weekday"],
-                    "source": "damai",
-                }
-                self.db.concert.insert_one(concert)
-                print("find one new concert from web")
+            existing = self.db.concert.find({"projectid": projectid}).count()
+            if existing > 1:
+                err = "damai concert project {} has {} records".format(projectid, existing)
+                raise Exception(err)
+            if existing == 1:
+                continue
+
+            concert = {
+                "projectid": projectid,
+                "actors": actors,
+                "cityname": cityname,
+                "name": name,
+                "venue": venue,
+                "venuecity": venuecity,
+                "performs": performs,
+                "source": "damai",
+            }
+            self.db.concert.insert_one(concert)
+            print("find one new concert from web")
 
     def get_price_list_from_web(self, projectid, performid):
         url = "https://piao.damai.cn/ajax/getPriceList.html?projectId={}&performId={}".format(projectid, performid)
@@ -121,8 +116,13 @@ class Damai(object):
             self.db.price_status.insert_one(price_status)
 
     def get_concerts_price_list_from_web(self):
-        concerts = self.db.concert.find({"source": "damai"}, {"projectid": 1, "performid": 1})
+        concerts = self.db.concert.aggregate([
+            {"$unwind": "$performs"},
+            {"$addFields": {"performid": "$performs.performid"}},
+            {"$project": {"projectid": 1, "performid": 1}}
+        ])
         for concert in concerts:
+            print(concert)
             projectid = concert["projectid"]
             performid = concert["performid"]
             self.get_price_list_from_web(projectid, performid)
@@ -133,6 +133,40 @@ class Damai(object):
             print(item)
 
     def get_concert_tickets_from_db(self, performid):
-        items = self.db.price_list.find({"performid": performid})
+        items = self.db.price_list.aggregate([
+            {"$match": {"performid": performid}},
+            {"$lookup": {"from": "price_status", "localField": "priceid", "foreignField": "priceid", "as": "price_status"}}
+        ])
+        result = []
         for item in items:
-            print(item)
+            pstatus_inorder = sorted(item["price_status"], key=lambda x: x["timestamp"], reverse=True)
+            price = item["price"]
+            has_ticket = None
+            if len(pstatus_inorder) > 0:
+                has_ticket = pstatus_inorder[0]["has_ticket"]
+
+            result.append({
+                "priceid": item["priceid"],
+                "price": price,
+                "has_ticket": has_ticket,
+                "name": item["name"],
+            })
+        return result
+
+    def get_concerts_tickets_from_db(self):
+        items = self.db.concert.aggregate([
+            {"$unwind": "$performs"},
+        ])
+        for item in items:
+            concert_name = item["name"]
+            venue = item["venue"]
+            actors = item["actors"]
+            performid = item["performs"]["performid"]
+            tickets = self.get_concert_tickets_from_db(performid)
+            projectid = item["projectid"]
+            for ticket in tickets:
+                priceid = ticket["priceid"]
+                price = ticket["price"]
+                has_ticket = ticket["has_ticket"]
+                ticket_name = ticket["name"]
+                print(concert_name, actors, venue, ticket_name, price, has_ticket)
