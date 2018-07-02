@@ -30,3 +30,12 @@ class Test(unittest.TestCase):
 
     def test_get_concerts_tickets_from_db(self):
         self.inst.get_concerts_tickets_from_db()
+
+    def test_get_performs_from_db(self):
+        self.inst.get_performs_from_db()
+
+    def test_get_sale_status_from_web(self):
+        self.inst.get_sale_status_from_web(149252)
+
+    def test_update_concerts_sale_status(self):
+        self.inst.update_concerts_sale_status()

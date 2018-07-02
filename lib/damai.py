@@ -1,6 +1,7 @@
 import datetime
 import re
 import json
+from lxml import etree
 import requests
 import pymongo
 
@@ -8,6 +9,34 @@ class Damai(object):
     def __init__(self):
         client = pymongo.MongoClient()
         self.db = client.ticket
+
+    def get_sale_status_from_web(self, projectid):
+        url = "https://piao.damai.cn/{}.html".format(projectid)
+        r = requests.get(url)
+        content = r.content.decode("utf-8")
+        root = etree.HTML(content)
+        div_node = root.find('.//div[@id="projectAxis"]')
+        status_nodes = div_node.xpath(".//div[contains(@class, 'itm-crt')]/h3")
+        if len(status_nodes) == 0:
+            return "unknown"
+        status_node = status_nodes[0]
+        text = status_node.text
+        if text == "售票中":
+            return "insale"
+        if text == "预售/预订":
+            return "presale"
+        if text == "项目待定":
+            return "tbd"
+        if text == "演出开始":
+            return "saleclosed"
+
+    def update_concerts_sale_status(self):
+        items = self.db.concert.find()
+        for item in items:
+            projectid = item["projectid"]
+            sale_status = self.get_sale_status_from_web(projectid)
+            self.db.concert.update_one({"projectid": projectid}, {"$set": {"salestatus": sale_status}})
+            print("updated sale status")
 
     def get_performs_from_web(self, projectid):
         url = "https://piao.damai.cn/ajax/getInfo.html?projectId={}".format(projectid)
@@ -72,6 +101,7 @@ class Damai(object):
                 "venuecity": venuecity,
                 "performs": performs,
                 "source": "damai",
+                "salestatus": "",
             }
             self.db.concert.insert_one(concert)
             print("find one new concert from web")
@@ -89,7 +119,7 @@ class Damai(object):
             has_ticket = item["Status"] == 0
             is_taopiao = item["IsTaoPiao"]
             priceid = item["PriceID"]
-            existing = self.db.price_list.find({"priceid": priceid}).count()
+            existing = self.db.std_price.find({"priceid": priceid}).count()
             if existing > 1:
                 err = "damai price {} has {} records".format(priceid, existing)
                 raise Exception(err)
@@ -104,14 +134,14 @@ class Damai(object):
                     "is_taopiao": is_taopiao,
                     "source": "damai",
                 }
-                self.db.price_list.insert_one(price)
+                self.db.std_price.insert_one(price)
                 print("find new price from web")
 
             now = datetime.datetime.now()
             price_status = {
                 "priceid": priceid,
                 "has_ticket": has_ticket,
-                "timestamp": now
+                "when_created": now
             }
             self.db.price_status.insert_one(price_status)
 
@@ -122,7 +152,6 @@ class Damai(object):
             {"$project": {"projectid": 1, "performid": 1}}
         ])
         for concert in concerts:
-            print(concert)
             projectid = concert["projectid"]
             performid = concert["performid"]
             self.get_price_list_from_web(projectid, performid)
@@ -133,13 +162,13 @@ class Damai(object):
             print(item)
 
     def get_concert_tickets_from_db(self, performid):
-        items = self.db.price_list.aggregate([
+        items = self.db.std_price.aggregate([
             {"$match": {"performid": performid}},
             {"$lookup": {"from": "price_status", "localField": "priceid", "foreignField": "priceid", "as": "price_status"}}
         ])
         result = []
         for item in items:
-            pstatus_inorder = sorted(item["price_status"], key=lambda x: x["timestamp"], reverse=True)
+            pstatus_inorder = sorted(item["price_status"], key=lambda x: x["when_created"], reverse=True)
             price = item["price"]
             has_ticket = None
             if len(pstatus_inorder) > 0:
@@ -153,10 +182,19 @@ class Damai(object):
             })
         return result
 
-    def get_concerts_tickets_from_db(self):
-        items = self.db.concert.aggregate([
-            {"$unwind": "$performs"},
-        ])
+    def get_concerts_tickets_from_db(self, sale_status=None):
+        items = []
+        if sale_status is None:
+            items = self.db.concert.aggregate([
+                {"$unwind": "$performs"},
+            ])
+        else:
+            items = self.db.concert.aggregate([
+                {"$unwind": "$performs"},
+                {"$match": {"salestatus": sale_status}},
+            ])
+
+        result = []
         for item in items:
             concert_name = item["name"]
             venue = item["venue"]
@@ -169,4 +207,29 @@ class Damai(object):
                 price = ticket["price"]
                 has_ticket = ticket["has_ticket"]
                 ticket_name = ticket["name"]
-                print(concert_name, actors, venue, ticket_name, price, has_ticket)
+                result.append({
+                    "concert_name": concert_name,
+                    "actors": actors,
+                    "projectid": projectid,
+                    "performid": performid,
+                    "priceid": priceid,
+                    "price": price,
+                    "has_ticket": has_ticket,
+                    "ticket_name": ticket_name
+                })
+        return result
+
+    def get_performs_from_db(self):
+        items = self.db.concert.aggregate([
+            {"$unwind": "$performs"},
+        ])
+        result = []
+        for item in items:
+            concert_name = item["name"]
+            performid = item["performs"]["performid"]
+            timestamp = item["performs"]["start_time"]
+            start_dt = datetime.datetime.fromtimestamp(timestamp)
+            venue = item["venue"]
+            actors = item["actors"]
+            result.append(item)
+        return result
