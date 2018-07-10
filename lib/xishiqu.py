@@ -95,10 +95,14 @@ class Xishiqu(object):
             r = requests.get(url, verify=False)
             content = r.content.decode("utf-8")
             data = json.loads(content)
+            if data["code"] == "000":
+                print("error with {}".format(url))
+                continue
             items = data["result"]["list"]
             for item in items:
                 pre_sale = item["isPreSale"] == "1"
                 result.append({
+                    "ticketid": item["ticketsId"],
                     "service": item["deliveryTime"]["serviceName"],
                     "seller": item["seller"],
                     "face_price": float(item["facePrice"]),
@@ -187,10 +191,13 @@ class Xishiqu(object):
             now = datetime.datetime.now()
             for ticket in tickets:
                 matched = self.find_std_price(performid, ticket["face_price"], ticket["section"])
-                existing = self.db.xishiqu_ask.find({"priceid": matched["priceid"]}).count()
+                if matched is None:
+                    continue
+                existing = self.db.xishiqu_ask.find({"ticketid": ticket["ticketid"]}).count()
                 if existing > 0:
                     continue
                 item = {
+                    "ticketid": ticket["ticketid"],
                     "priceid": matched["priceid"],
                     "ask": ticket["deal_price"],
                     "amount": ticket["amount"],
@@ -206,7 +213,19 @@ class Xishiqu(object):
 
     def get_asks_by_priceid(self, priceid):
         items = self.db.xishiqu_ask.find({"priceid": priceid})
-        return items
+        result = []
+        for item in items:
+            result.append({
+                "priceid": item["priceid"],
+                "ask": item["ask"],
+                "amount": item["amount"],
+                "service": item["service"],
+                "seller": item["seller"],
+                "express": item["express"],
+                "section": item["section"],
+                "is_series": item["is_series"],
+            })
+        return result
 
     @staticmethod
     def get_commission(price):
